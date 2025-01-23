@@ -1,47 +1,40 @@
 import os
+import pickle
 import matplotlib.pyplot as plt
 import torch
-from pyannote.audio import Pipeline
-from pyannote.metrics.diarization import DiarizationErrorRate, GreedyMapper
-from pyannote.core import Annotation, Segment
-from pydub import AudioSegment
-import pickle
 
-from src.dataloader import DataLoader
+from pyannote.audio import Pipeline
+from pyannote.metrics.diarization import DiarizationErrorRate
+from pyannote.core import Annotation, Segment
+from pyannote.audio.pipelines.utils.hook import ProgressHook
+
+from src.audiofile import AudioFile
 from src.config import config
 
 
 class SpeakerDiarizationPipeline:
-    def __init__(self, audio_file, true_rttm_path, output_dir):
-        # Convert mp3 to wav
-        if audio_file.endswith('.mp3'):
-            audio_file_wav = audio_file.replace('.mp3', '.wav')
-            if not os.path.exists(audio_file_wav):
-                audio = AudioSegment.from_mp3(audio_file)
-                audio.export(audio_file_wav, format='wav')
-            audio_file = audio_file_wav
-        
+    def __init__(self, audio_file: AudioFile):
         self.audio_file = audio_file
-        self.audio_filename = os.path.splitext(os.path.basename(self.audio_file))[0]
-        self.diarization_dir = os.path.join(self.output_dir, "diarization_results")
-        os.makedirs(self.diarization_dir, exist_ok=True)
-        self.true_rttm_path = true_rttm_path
-        self.output_dir = output_dir
+
+
+        self.device = self.get_device()
         self.pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=config.hf_token)
-        self.num_speakers = self.get_number_of_speakers()
+        self.pipeline.to(self.device)
+
+        self.metric = DiarizationErrorRate()
     
-    def get_number_of_speakers(self) -> int:
-        speakers = set()
-        with open(self.true_rttm_path, 'r') as f:
-            for line in f:
-                parts = line.strip().split()
-                speaker = parts[7]
-                speakers.add(speaker)
-        return len(speakers)
+
+    def get_device(self):
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            return torch.device("mps")
+        else:
+            return torch.device("cpu")
 
     def diarize(self) -> Annotation:
         # Define the path for the saved diarization result
-        diarization_path = os.path.join(self.diarization_dir, f"{self.audio_filename}.pkl")
+        diarization_path = self.audio_file.diarization_path
 
         # Check if the diarization result already exists
         if os.path.exists(diarization_path):
@@ -50,8 +43,9 @@ class SpeakerDiarizationPipeline:
                 diarization = pickle.load(f)
         else:
             print("Running diarization...")
-            self.pipeline.to(torch.device("mps"))
-            diarization = self.pipeline(self.audio_file, num_speakers=self.num_speakers)
+            # Use the pre-set device
+            with ProgressHook() as hook:
+                diarization = self.pipeline(self.audio_file.audio_file_path, hook=hook)
             
             # Save the diarization result
             with open(diarization_path, 'wb') as f:
@@ -61,20 +55,15 @@ class SpeakerDiarizationPipeline:
         return diarization
 
     def save_predicted_rttm(self, diarization: Annotation):
-        pred_rttm_dir = os.path.join(self.output_dir, "pred_rttm")
-        os.makedirs(pred_rttm_dir, exist_ok=True)
-        
         # Use the audio file name for the predicted RTTM file
-        pred_rttm_path = os.path.join(pred_rttm_dir, f"{self.audio_filename}.rttm")
-        
-        with open(pred_rttm_path, 'w') as f:
+        with open(self.audio_file.pred_rttm_path, 'w') as f:
             diarization.write_rttm(f)
-        print(f"Predicted RTTM saved to {pred_rttm_path}")
+        print(f"Predicted RTTM saved to {self.audio_file.pred_rttm_path}")
 
     def calculate_der(self, diarization: Annotation):
         # Load ground truth RTTM
         reference = Annotation()
-        with open(self.true_rttm_path, 'r') as f:
+        with open(self.audio_file.true_rttm_path, 'r') as f:
             for line in f:
                 parts = line.strip().split()
                 start, duration, speaker = float(parts[3]), float(parts[4]), parts[7]
@@ -87,8 +76,8 @@ class SpeakerDiarizationPipeline:
         # Get the total duration of the audio
         audio_duration = sum(segment.duration for segment in reference.get_timeline())
 
-        # Instantiate the DiarizationErrorRate metric
-        metric = DiarizationErrorRate()
+        # Use the pre-initialized metric
+        metric = self.metric
 
         # Initialize lists to store results
         cumulative_der = []
@@ -126,6 +115,9 @@ class SpeakerDiarizationPipeline:
             start_time += step_size
 
         # Plot DER as a function of percentage of audio processed
+        return cumulative_percentage, cumulative_der
+
+    def plot_der(self, cumulative_percentage, cumulative_der):
         plt.figure(figsize=(10, 6))
         plt.plot(cumulative_percentage, cumulative_der, marker='o', label='Cumulative DER')
         plt.xlabel('Percentage of Audio Processed (%)')
@@ -135,10 +127,7 @@ class SpeakerDiarizationPipeline:
         plt.legend()
         plt.show()
 
-        # Print the overall DER for reference
-        overall_der = metric(reference, diarization)
-        print(f"Overall Diarization Error Rate (DER): {overall_der * 100:.2f}%")
-        return overall_der
+
 
 
 if __name__ == "__main__": 
@@ -148,12 +137,12 @@ if __name__ == "__main__":
     output_dir = "outputs"
 
     # Initialize DataLoader and generate RTTM
-    data_loader = DataLoader(audio_file, transcript_file, output_dir)
-    data_loader.generate_true_rttm()
-    true_rttm_path = data_loader.get_true_rttm_path()
+    audio_file_instance = AudioFile(audio_file, transcript_file, output_dir)
+    audio_file_instance.generate_true_rttm()
 
     # Initialize and execute the pipeline
-    pipeline = SpeakerDiarizationPipeline(audio_file, true_rttm_path, output_dir)
+    pipeline = SpeakerDiarizationPipeline(audio_file_instance)
     diarization = pipeline.diarize()
     pipeline.save_predicted_rttm(diarization)
-    pipeline.calculate_der(diarization)
+    cumulative_percentage, cumulative_der = pipeline.calculate_der(diarization)
+    pipeline.plot_der(cumulative_percentage, cumulative_der)

@@ -4,3 +4,5 @@
 outputs/
 dataset/audio/
 dataset/transcript/
+
+__pycache__/
