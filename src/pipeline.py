@@ -5,6 +5,7 @@ from pyannote.audio import Pipeline
 from pyannote.metrics.diarization import DiarizationErrorRate, GreedyMapper
 from pyannote.core import Annotation, Segment
 from pydub import AudioSegment
+import pickle
 
 from src.dataloader import DataLoader
 from src.config import config
@@ -22,6 +23,8 @@ class SpeakerDiarizationPipeline:
         
         self.audio_file = audio_file
         self.audio_filename = os.path.splitext(os.path.basename(self.audio_file))[0]
+        self.diarization_dir = os.path.join(self.output_dir, "diarization_results")
+        os.makedirs(self.diarization_dir, exist_ok=True)
         self.true_rttm_path = true_rttm_path
         self.output_dir = output_dir
         self.pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=config.hf_token)
@@ -37,8 +40,24 @@ class SpeakerDiarizationPipeline:
         return len(speakers)
 
     def diarize(self) -> Annotation:
-        self.pipeline.to(torch.device("mps"))
-        diarization = self.pipeline(self.audio_file, num_speakers=self.num_speakers)
+        # Define the path for the saved diarization result
+        diarization_path = os.path.join(self.diarization_dir, f"{self.audio_filename}.pkl")
+
+        # Check if the diarization result already exists
+        if os.path.exists(diarization_path):
+            print(f"Loading diarization from {diarization_path}")
+            with open(diarization_path, 'rb') as f:
+                diarization = pickle.load(f)
+        else:
+            print("Running diarization...")
+            self.pipeline.to(torch.device("mps"))
+            diarization = self.pipeline(self.audio_file, num_speakers=self.num_speakers)
+            
+            # Save the diarization result
+            with open(diarization_path, 'wb') as f:
+                pickle.dump(diarization, f)
+            print(f"Diarization saved to {diarization_path}")
+
         return diarization
 
     def save_predicted_rttm(self, diarization: Annotation):
@@ -61,36 +80,66 @@ class SpeakerDiarizationPipeline:
                 start, duration, speaker = float(parts[3]), float(parts[4]), parts[7]
                 reference[Segment(start, start + duration)] = speaker
 
-        # Map predicted speakers to reference speakers
-        # mapping = GreedyMapper()
-        # mapped_diarization = mapping(reference, diarization)
-        # Ensure mapped_diarization is an Annotation object
-        # if isinstance(mapped_diarization, dict):
-        #     mapped_diarization = Annotation.from_dict(mapped_diarization)
+        # Define window size for DER calculation (in seconds)
+        window_size = 30.0  # 30-second windows
+        step_size = 15.0  # Overlapping step size (15 seconds)
 
-        # Calculate DER
+        # Get the total duration of the audio
+        audio_duration = sum(segment.duration for segment in reference.get_timeline())
+
+        # Instantiate the DiarizationErrorRate metric
         metric = DiarizationErrorRate()
-        # Has a Default Mapper
-        der = metric(reference, diarization)
-        print(f"Diarization Error Rate (DER): {der * 100:.2f}%")
 
-        # Calculate percentage of audio diarized
-        total_duration = sum(segment.duration for segment in reference.get_timeline())
-        diarized_duration = sum(segment.duration for segment in diarization.get_timeline())
-        percentage_diarized = diarized_duration / total_duration
+        # Initialize lists to store results
+        cumulative_der = []
+        cumulative_percentage = []
 
-        # Plot DER vs. Percentage of Audio Diarized
-        plt.figure()
-        plt.plot([percentage_diarized], [der * 100], 'bo')
-        plt.xlabel('Percentage of Audio Diarized')
+        # Calculate DER for cumulative segments
+        processed_duration = 0.0
+        start_time = 0.0
+
+        while start_time < audio_duration:
+            end_time = min(start_time + window_size, audio_duration)
+            window = Segment(0.0, end_time)  # Cumulative segment from start to current window's end
+
+            # Crop reference and diarization to the current cumulative window
+            reference_window = reference.crop(window, mode="loose")
+            diarization_window = diarization.crop(window, mode="loose")
+
+            # Skip if the cumulative window is empty
+            if not reference_window or not diarization_window:
+                start_time += step_size
+                continue
+
+            # Compute DER for the cumulative window
+            der = metric(reference_window, diarization_window)
+
+            # Update processed duration and calculate percentage
+            processed_duration = end_time
+            percentage_processed = processed_duration / audio_duration * 100
+
+            # Append to results
+            cumulative_der.append(der * 100)
+            cumulative_percentage.append(percentage_processed)
+
+            # Move to the next window
+            start_time += step_size
+
+        # Plot DER as a function of percentage of audio processed
+        plt.figure(figsize=(10, 6))
+        plt.plot(cumulative_percentage, cumulative_der, marker='o', label='Cumulative DER')
+        plt.xlabel('Percentage of Audio Processed (%)')
         plt.ylabel('Diarization Error Rate (%)')
-        plt.title('DER vs. Percentage of Audio Diarized')
-        plt.xlim(0, 1)
-        plt.ylim(0, 100)
+        plt.title('DER vs Percentage of Audio Processed')
         plt.grid(True)
+        plt.legend()
         plt.show()
 
-        return der
+        # Print the overall DER for reference
+        overall_der = metric(reference, diarization)
+        print(f"Overall Diarization Error Rate (DER): {overall_der * 100:.2f}%")
+        return overall_der
+
 
 if __name__ == "__main__": 
     # Paths
