@@ -1,6 +1,6 @@
 import os
 import matplotlib.pyplot as plt
-
+import torch
 from pyannote.audio import Pipeline
 from pyannote.metrics.diarization import DiarizationErrorRate, GreedyMapper
 from pyannote.core import Annotation, Segment
@@ -37,6 +37,7 @@ class SpeakerDiarizationPipeline:
         return len(speakers)
 
     def diarize(self) -> Annotation:
+        self.pipeline.to(torch.device("mps"))
         diarization = self.pipeline(self.audio_file, num_speakers=self.num_speakers)
         return diarization
 
@@ -61,21 +62,21 @@ class SpeakerDiarizationPipeline:
                 reference[Segment(start, start + duration)] = speaker
 
         # Map predicted speakers to reference speakers
-        mapping = GreedyMapper()
-        mapped_diarization = mapping(reference, diarization)
-        breakpoint()    
+        # mapping = GreedyMapper()
+        # mapped_diarization = mapping(reference, diarization)
         # Ensure mapped_diarization is an Annotation object
-        if isinstance(mapped_diarization, dict):
-            mapped_diarization = Annotation.from_dict(mapped_diarization)
+        # if isinstance(mapped_diarization, dict):
+        #     mapped_diarization = Annotation.from_dict(mapped_diarization)
 
         # Calculate DER
         metric = DiarizationErrorRate()
-        der = metric(reference, mapped_diarization)
+        # Has a Default Mapper
+        der = metric(reference, diarization)
         print(f"Diarization Error Rate (DER): {der * 100:.2f}%")
 
         # Calculate percentage of audio diarized
         total_duration = sum(segment.duration for segment in reference.get_timeline())
-        diarized_duration = sum(segment.duration for segment in mapped_diarization.get_timeline())
+        diarized_duration = sum(segment.duration for segment in diarization.get_timeline())
         percentage_diarized = diarized_duration / total_duration
 
         # Plot DER vs. Percentage of Audio Diarized
