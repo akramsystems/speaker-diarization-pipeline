@@ -1,0 +1,6 @@
+
+/venv/
+.env
+outputs/
+dataset/audio/
+dataset/transcript/
