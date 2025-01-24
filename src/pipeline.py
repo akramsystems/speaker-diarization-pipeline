@@ -1,11 +1,10 @@
 import os
 import pickle
-from typing import Optional, Callable
 
 import matplotlib.pyplot as plt
 import torch
 from pyannote.audio import Pipeline
-from pyannote.metrics.diarization import DiarizationErrorRate
+from pyannote.metrics.diarization import DiarizationErrorRate, JaccardErrorRate
 from pyannote.core import Annotation, Segment
 from pyannote.audio.pipelines.utils.hook import ProgressHook
 
@@ -13,19 +12,21 @@ from src.audiofile import AudioFile
 from src.config import config
 from src.util import StreamlitProgressHook
 
+speaker_diarization_pipeline = Pipeline.from_pretrained(
+    "pyannote/speaker-diarization-3.1",
+    use_auth_token=config.hf_token
+)
 
 class SpeakerDiarizationPipeline:
     def __init__(self, audio_file: AudioFile):
         self.audio_file = audio_file
-
-
         self.device = self.get_device()
-        self.pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=config.hf_token)
+        self.pipeline = speaker_diarization_pipeline
         self.pipeline.to(self.device)
 
-        self.metric = DiarizationErrorRate()
+        self.metric_der = DiarizationErrorRate()
+        self.metric_jer = JaccardErrorRate()
     
-
     def get_device(self):
         if torch.cuda.is_available():
             return torch.device("cuda")
@@ -43,7 +44,6 @@ class SpeakerDiarizationPipeline:
             print(f"Loading diarization from {diarization_path}")
             with open(diarization_path, 'rb') as f:
                 diarization = pickle.load(f)
-        
         else:
             print("Running diarization streamlit...")
 
@@ -65,23 +65,15 @@ class SpeakerDiarizationPipeline:
         print(f"Predicted RTTM saved to {self.audio_file.pred_rttm_path}")
 
     def calculate_der(self, diarization: Annotation):
-        # Load ground truth RTTM
-        reference = Annotation()
-        with open(self.audio_file.true_rttm_path, 'r') as f:
-            for line in f:
-                parts = line.strip().split()
-                start, duration, speaker = float(parts[3]), float(parts[4]), parts[7]
-                reference[Segment(start, start + duration)] = speaker
-
+        
+        reference = self.audio_file.reference
+        
         # Define window size for DER calculation (in seconds)
         window_size = 30.0  # 30-second windows
         step_size = 15.0  # Overlapping step size (15 seconds)
 
         # Get the total duration of the audio
         audio_duration = sum(segment.duration for segment in reference.get_timeline())
-
-        # Use the pre-initialized metric
-        metric = self.metric
 
         # Initialize lists to store results
         cumulative_der = []
@@ -99,13 +91,14 @@ class SpeakerDiarizationPipeline:
             reference_window = reference.crop(window, mode="loose")
             diarization_window = diarization.crop(window, mode="loose")
 
+            
             # Skip if the cumulative window is empty
             if not reference_window or not diarization_window:
                 start_time += step_size
                 continue
 
             # Compute DER for the cumulative window
-            der = metric(reference_window, diarization_window)
+            der = self.metric_der(reference_window, diarization_window)
 
             # Update processed duration and calculate percentage
             processed_duration = end_time
@@ -132,6 +125,70 @@ class SpeakerDiarizationPipeline:
         
         # Save the plot to the specified directory
         plot_path = os.path.join("outputs", "accuracy_plots", f"{self.audio_file.audio_filename}_der_plot.png")
+        plt.savefig(plot_path)
+        print(f"Plot saved to {plot_path}")
+        
+        return fig
+
+    def calculate_jer(self, diarization: Annotation):
+        reference = self.audio_file.reference
+        
+        # Define window size for JER calculation (in seconds)
+        window_size = 30.0  # 30-second windows
+        step_size = 15.0  # Overlapping step size (15 seconds)
+
+        # Get the total duration of the audio
+        audio_duration = sum(segment.duration for segment in reference.get_timeline())
+
+        # Initialize lists to store results
+        cumulative_jer = []
+        cumulative_percentage = []
+
+        # Calculate JER for cumulative segments
+        processed_duration = 0.0
+        start_time = 0.0
+
+        while start_time < audio_duration:
+            end_time = min(start_time + window_size, audio_duration)
+            window = Segment(0.0, end_time)  # Cumulative segment from start to current window's end
+
+            # Crop reference and diarization to the current cumulative window
+            reference_window = reference.crop(window, mode="loose")
+            diarization_window = diarization.crop(window, mode="loose")
+
+            # Skip if the cumulative window is empty
+            if not reference_window or not diarization_window:
+                start_time += step_size
+                continue
+
+            # Compute JER for the cumulative window
+            jer = self.metric_jer(reference_window, diarization_window)
+
+            # Update processed duration and calculate percentage
+            processed_duration = end_time
+            percentage_processed = processed_duration / audio_duration * 100
+
+            # Append to results
+            cumulative_jer.append(jer * 100)
+            cumulative_percentage.append(percentage_processed)
+
+            # Move to the next window
+            start_time += step_size
+
+        # Return JER as a function of percentage of audio processed
+        return cumulative_percentage, cumulative_jer
+
+    def plot_jer(self, cumulative_percentage, cumulative_jer):
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(cumulative_percentage, cumulative_jer, marker='o', label='Cumulative JER')
+        ax.set_xlabel('Percentage of Audio Processed (%)')
+        ax.set_ylabel('Jaccard Error Rate (%)')
+        ax.set_title('JER vs Percentage of Audio Processed')
+        ax.grid(True)
+        ax.legend()
+        
+        # Save the plot to the specified directory
+        plot_path = os.path.join("outputs", "accuracy_plots", f"{self.audio_file.audio_filename}_jer_plot.png")
         plt.savefig(plot_path)
         print(f"Plot saved to {plot_path}")
         

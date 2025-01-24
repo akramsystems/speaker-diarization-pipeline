@@ -3,7 +3,7 @@
 - Python3.11
 ## Overview
 
-This project implements a speaker diarization system using the `pyannote.audio` library. The system processes audio files to identify and differentiate between speakers, providing a diarization error rate (DER) plot to evaluate performance. We use the pipeline from huggingface to perform the speaker diarization, since it combines both the segmentation and speaker diarization in one pipeline for us.  A more detailed explanation of the pipeline can be found [here](https://huggingface.co/pyannote/speaker-diarization-3.1).
+This project implements a speaker diarization system using the `pyannote.audio` library. The system processes audio files to identify and differentiate between speakers, providing a diarization error rate (DER) and jaccard error rate (JER) plots to evaluate performance. We use the pipeline from huggingface to perform the speaker diarization, since it combines both the segmentation and speaker diarization in one pipeline for us.  A more detailed explanation of the pipeline can be found [here](https://huggingface.co/pyannote/speaker-diarization-3.1).
 
 The TLDR of the speaker diarization pipeline can be observed in the following image:
 
@@ -60,13 +60,20 @@ The TLDR of the speaker diarization pipeline can be observed in the following im
 3. **Wait for the pipeline to finish**:
    - It takes a while, I was using an m1 2020 macbook pro, it took about 10 minutes.
 
-    ![Streamlit Progress Bar](imgs/glitch-loading-bar.png)
+    ![Streamlit Progress Bar](imgs/glitchy-loading-bar.png)
 
 3. **View results**:
    - The app will display a plot of the Diarization Error Rate (DER) over the percentage of audio processed.
    - it should also save the plot to the `outputs/accuracy_plots` directory.
 
+   (pretty underwhelming results I agree)
+
     ![Streamlit DER Plot](imgs/streamlit-der-plot.png)
+    ![Streamlit JER Plot](imgs/streamlit-jer-plot.png)
+
+    ```
+    Note: If you repeat the experiment with the same files it will load the same previous diariazation results since i pickle it and save it in the /outputs/diarization_results folder since my computer was slow, and debugging was slow. If you want fresh results delete the saved diarizations and the pipeline will re-run for your given audio file.
+    ```
 
 ## Project Structure
 
@@ -76,8 +83,13 @@ The TLDR of the speaker diarization pipeline can be observed in the following im
   - `config.py`: Manages configuration settings.
   - `util.py`: Contains utility functions, including Streamlit progress hooks.
 - `dataset/`: Directory for uploading/storing audio and transcript files.
-- `outputs/`: Directory for storing output files, including RTTM file and DER plots.
+- `outputs/`: Directory for storing output files, including RTTM file and DER + JER plots.
 - `.streamlit/config.toml`: Configuration for Streamlit.
+
+
+## Considerations For Future Work
+
+The results are pretty underwhelming, but this is to be expected!  If we look at the % DER in the original [repo](https://github.com/pyannote/pyannote-audio) we see the accuracies vary between __%8 to as high as %50__ with a majority of results falling in the bounds of our accuracy (%20 - %30).  I was originally going to use the `nemo-toolkit[asr]` module since it offers a similar embedding model (TitaNet) to that of the pyannote but the clustering technique and voice activation detection (VAD) models are different.  Comparing these two approaches i can see what pipeline is better out of the box. After that Hyperparameter tuning can be done on the VAD/Segmentation proces (i.e. adjust thresholds for detection), the embedding model (use different segment lengths), and the clustering model can be tuned or replaced with a different clustering model.  I did virtually no alteration to the defaults.
 
 ## License
 

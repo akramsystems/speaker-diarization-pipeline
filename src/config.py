@@ -8,8 +8,8 @@ load_dotenv()
 @dataclass
 class Config:
     hf_token: str = os.getenv("HF_TOKEN")
-    output_dir: str = "outputs"
     dataset_dir: str = "dataset"
+    output_dir: str = "outputs"
     audio_dir: str = os.path.join(dataset_dir, "audio")
     transcript_dir: str = os.path.join(dataset_dir, "transcript")
     true_rttm_dir: str = os.path.join(output_dir, "true_rttm")

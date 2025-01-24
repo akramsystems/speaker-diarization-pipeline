@@ -1,6 +1,8 @@
 import os
 import json
 from pydub import AudioSegment
+from pyannote.core import Annotation, Segment
+
 
 class AudioFile:
     def __init__(self, audio_file_path, transcript_file_path, output_dir):
@@ -12,16 +14,26 @@ class AudioFile:
         self.pred_rttm_path = os.path.join(self.output_dir, "pred_rttm", f"{self.audio_filename}.rttm")
         self.diarization_path = os.path.join(self.output_dir, "diarization_results", f"{self.audio_filename}.pkl")
         self.accuracy_plot_path = os.path.join(self.output_dir, "accuracy_plots", f"{self.audio_filename}_der_plot.png")
-
         
         os.makedirs(os.path.dirname(self.true_rttm_path), exist_ok=True)
         os.makedirs(os.path.dirname(self.pred_rttm_path), exist_ok=True)
         os.makedirs(os.path.dirname(self.diarization_path), exist_ok=True)
         os.makedirs(os.path.dirname(self.accuracy_plot_path), exist_ok=True)
-        
+
         self.generate_true_rttm()
         self.num_speakers = self.get_number_of_speakers()
         self.audio_file_path = self.convert_audio_to_wav(audio_file_path)
+        self.reference = self.get_reference_annotation()
+    
+    def get_reference_annotation(self):
+        # Load ground truth RTTM
+        reference = Annotation()
+        with open(self.true_rttm_path, 'r') as f:
+            for line in f:
+                parts = line.strip().split()
+                start, duration, speaker = float(parts[3]), float(parts[4]), parts[7]
+                reference[Segment(start, start + duration)] = speaker
+        return reference
 
     def convert_audio_to_wav(self, audio_file: str) -> str:
         if audio_file.endswith('.mp3'):
