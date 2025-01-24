@@ -1,8 +1,9 @@
 import os
 import pickle
+from typing import Optional, Callable
+
 import matplotlib.pyplot as plt
 import torch
-
 from pyannote.audio import Pipeline
 from pyannote.metrics.diarization import DiarizationErrorRate
 from pyannote.core import Annotation, Segment
@@ -10,6 +11,7 @@ from pyannote.audio.pipelines.utils.hook import ProgressHook
 
 from src.audiofile import AudioFile
 from src.config import config
+from src.util import StreamlitProgressHook
 
 
 class SpeakerDiarizationPipeline:
@@ -32,7 +34,7 @@ class SpeakerDiarizationPipeline:
         else:
             return torch.device("cpu")
 
-    def diarize(self) -> Annotation:
+    def diarize(self, streamlit_progress_hook: bool = False) -> Annotation:
         # Define the path for the saved diarization result
         diarization_path = self.audio_file.diarization_path
 
@@ -41,13 +43,15 @@ class SpeakerDiarizationPipeline:
             print(f"Loading diarization from {diarization_path}")
             with open(diarization_path, 'rb') as f:
                 diarization = pickle.load(f)
+        
         else:
-            print("Running diarization...")
-            # Use the pre-set device
-            with ProgressHook() as hook:
+            print("Running diarization streamlit...")
+
+            Hook = StreamlitProgressHook if streamlit_progress_hook else ProgressHook
+            
+            with Hook() as hook:
                 diarization = self.pipeline(self.audio_file.audio_file_path, hook=hook)
             
-            # Save the diarization result
             with open(diarization_path, 'wb') as f:
                 pickle.dump(diarization, f)
             print(f"Diarization saved to {diarization_path}")
@@ -118,14 +122,20 @@ class SpeakerDiarizationPipeline:
         return cumulative_percentage, cumulative_der
 
     def plot_der(self, cumulative_percentage, cumulative_der):
-        plt.figure(figsize=(10, 6))
-        plt.plot(cumulative_percentage, cumulative_der, marker='o', label='Cumulative DER')
-        plt.xlabel('Percentage of Audio Processed (%)')
-        plt.ylabel('Diarization Error Rate (%)')
-        plt.title('DER vs Percentage of Audio Processed')
-        plt.grid(True)
-        plt.legend()
-        plt.show()
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(cumulative_percentage, cumulative_der, marker='o', label='Cumulative DER')
+        ax.set_xlabel('Percentage of Audio Processed (%)')
+        ax.set_ylabel('Diarization Error Rate (%)')
+        ax.set_title('DER vs Percentage of Audio Processed')
+        ax.grid(True)
+        ax.legend()
+        
+        # Save the plot to the specified directory
+        plot_path = os.path.join("outputs", "accuracy_plots", f"{self.audio_file.audio_filename}_der_plot.png")
+        plt.savefig(plot_path)
+        print(f"Plot saved to {plot_path}")
+        
+        return fig
 
 
 
@@ -145,4 +155,7 @@ if __name__ == "__main__":
     diarization = pipeline.diarize()
     pipeline.save_predicted_rttm(diarization)
     cumulative_percentage, cumulative_der = pipeline.calculate_der(diarization)
-    pipeline.plot_der(cumulative_percentage, cumulative_der)
+    fig = pipeline.plot_der(cumulative_percentage, cumulative_der)
+
+    # Show the plot when running this script directly
+    plt.show()

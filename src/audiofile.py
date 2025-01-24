@@ -7,17 +7,19 @@ class AudioFile:
         self.transcript_file_path = transcript_file_path
         self.audio_filename = os.path.splitext(os.path.basename(audio_file_path))[0]
         
-        self.output_dir = output_dir
+        self.output_dir = os.path.abspath(output_dir)
         self.true_rttm_path = os.path.join(self.output_dir, "true_rttm", f"{self.audio_filename}.rttm")
         self.pred_rttm_path = os.path.join(self.output_dir, "pred_rttm", f"{self.audio_filename}.rttm")
         self.diarization_path = os.path.join(self.output_dir, "diarization_results", f"{self.audio_filename}.pkl")
+        self.accuracy_plot_path = os.path.join(self.output_dir, "accuracy_plots", f"{self.audio_filename}_der_plot.png")
 
         
         os.makedirs(os.path.dirname(self.true_rttm_path), exist_ok=True)
         os.makedirs(os.path.dirname(self.pred_rttm_path), exist_ok=True)
         os.makedirs(os.path.dirname(self.diarization_path), exist_ok=True)
-
-
+        os.makedirs(os.path.dirname(self.accuracy_plot_path), exist_ok=True)
+        
+        self.generate_true_rttm()
         self.num_speakers = self.get_number_of_speakers()
         self.audio_file_path = self.convert_audio_to_wav(audio_file_path)
 

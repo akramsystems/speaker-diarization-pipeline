@@ -1,0 +1,7 @@
+[global]
+# Add the src directory to the Python path
+pythonPath = "./src" 
+
+[server]
+# Enable auto-reload
+runOnSave = true 

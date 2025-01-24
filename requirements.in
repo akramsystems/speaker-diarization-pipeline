@@ -1,0 +1,11 @@
+
+pyannote.audio
+pyannote.core
+pyannote.database
+pyannote.metrics
+pyannote.pipeline
+streamlit
+tqdm
+pydub
+python-dotenv
+torch
